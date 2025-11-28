@@ -1,0 +1,12 @@
+# Python 관련
+__pycache__/
+*.pyc
+
+# IDE 설정 파일 (친구랑 설정 충돌 방지)
+.vscode/
+.idea/
+
+# 혹시 모를 빌드 파일 (실수로 src 안에 생길 경우 대비)
+build/
+install/
+log/
