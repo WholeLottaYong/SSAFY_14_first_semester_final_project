@@ -1,3 +1,7 @@
+# 다음 주 예정 작업
+# 1. cv2.undistortPoints 활용 오차 보정 : 카메라 렌즈의 굴곡(왜곡) 때문에 화면 가장자리에서 좌표가 휘어지는 현상을 수학적으로 펴주는 함수
+# 2. 다시 카메라 세팅해서 변환 함수 초기화(카메라 좌표(cube_detector), 로봇 좌표(ros2 topic echo /dobot_TCP) 재측정)
+
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
