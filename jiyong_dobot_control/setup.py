@@ -38,6 +38,7 @@ setup(
             'scanner_average = jiyong_dobot_control.scanner_average:main',
             'dobot_test = jiyong_dobot_control.dobot_test:main',
             'dobot_test2 = jiyong_dobot_control.dobot_test2:main',
+            'dobot_test3 = jiyong_dobot_control.dobot_test3:main',
         ],
     },
 )
