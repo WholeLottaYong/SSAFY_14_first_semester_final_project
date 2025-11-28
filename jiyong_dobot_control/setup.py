@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 import os # 경로 생성기
 from glob import glob # 특정 파일 전부 가져오기
 
-package_name = 'dobot_control'
+package_name = 'jiyong_dobot_control'
 
 setup(
     name=package_name,
@@ -32,12 +32,12 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'cube_detector = dobot_control.cube_detector:main',
-            'calc_matrix = dobot_control.calc_matrix:main',
-            'scanner_only = dobot_control.scanner_only:main',
-            'scanner_average = dobot_control.scanner_average:main',
-            'dobot_test = dobot_control.dobot_test:main',
-            'dobot_test2 = dobot_control.dobot_test2:main',
+            'cube_detector = jiyong_dobot_control.cube_detector:main',
+            'calc_matrix = jiyong_dobot_control.calc_matrix:main',
+            'scanner_only = jiyong_dobot_control.scanner_only:main',
+            'scanner_average = jiyong_dobot_control.scanner_average:main',
+            'dobot_test = jiyong_dobot_control.dobot_test:main',
+            'dobot_test2 = jiyong_dobot_control.dobot_test2:main',
         ],
     },
 )
