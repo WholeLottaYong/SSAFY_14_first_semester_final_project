@@ -34,8 +34,6 @@ setup(
         'console_scripts': [
             'cube_detector = jiyong_dobot_control.cube_detector:main',
             'calc_matrix = jiyong_dobot_control.calc_matrix:main',
-            'scanner_only = jiyong_dobot_control.scanner_only:main',
-            'scanner_average = jiyong_dobot_control.scanner_average:main',
             'dobot_test = jiyong_dobot_control.dobot_test:main',
             'dobot_test2 = jiyong_dobot_control.dobot_test2:main',
             'dobot_test3 = jiyong_dobot_control.dobot_test3:main',
