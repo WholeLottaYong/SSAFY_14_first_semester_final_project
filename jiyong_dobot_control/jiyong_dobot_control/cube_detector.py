@@ -12,13 +12,13 @@ class CubeDetector(Node):
         
         self.bridge = CvBridge()
         
-        # 토픽 설정 (환경에 따라 다를 수 있음)
         self.color_topic = '/camera/camera/color/image_raw'
         self.depth_topic = '/camera/camera/aligned_depth_to_color/image_raw'
         self.info_topic  = '/camera/camera/color/camera_info'
 
         self.latest_depth_img = None
         self.camera_intrinsics = None
+        self.dist_coeffs = None  # [추가] 왜곡 계수 저장 변수
         
         self.create_subscription(CameraInfo, self.info_topic, self.info_callback, 10)
         self.create_subscription(Image, self.depth_topic, self.depth_callback, qos_profile_sensor_data)
@@ -41,17 +41,21 @@ class CubeDetector(Node):
 
     def info_callback(self, msg):
         if self.camera_intrinsics is None:
-            self.camera_intrinsics = {'fx': msg.k[0], 'fy': msg.k[4], 'cx': msg.k[2], 'cy': msg.k[5]}
+            self.camera_intrinsics = {
+                'fx': msg.k[0], 'fy': msg.k[4], 
+                'cx': msg.k[2], 'cy': msg.k[5]
+            }
+            self.dist_coeffs = np.array(msg.d) # [추가] 왜곡 계수 저장
 
     def depth_callback(self, msg):
         try: self.latest_depth_img = self.bridge.imgmsg_to_cv2(msg, "16UC1")
-        except CvBridgeError as e: pass
+        except CvBridgeError: pass
 
     def color_callback(self, msg):
         try:
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             self.process_image(cv_image)
-        except CvBridgeError as e: pass
+        except CvBridgeError: pass
 
     def mouse_callback(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -60,9 +64,10 @@ class CubeDetector(Node):
             if self.selecting: self.roi_end = (x, y)
         elif event == cv2.EVENT_LBUTTONUP:
             self.selecting = False; self.roi_end = (x, y); self.roi_selected = True
-            x1 = min(self.roi_start[0], self.roi_end[0]); y1 = min(self.roi_start[1], self.roi_end[1])
-            x2 = max(self.roi_start[0], self.roi_end[0]); y2 = max(self.roi_start[1], self.roi_end[1])
-            self.roi_rect = (x1, y1, x2-x1, y2-y1)
+            if self.roi_start and self.roi_end:
+                x1 = min(self.roi_start[0], self.roi_end[0]); y1 = min(self.roi_start[1], self.roi_end[1])
+                x2 = max(self.roi_start[0], self.roi_end[0]); y2 = max(self.roi_start[1], self.roi_end[1])
+                self.roi_rect = (x1, y1, x2-x1, y2-y1)
 
     def process_image(self, frame):
         processing_frame = frame
@@ -76,7 +81,7 @@ class CubeDetector(Node):
                 processing_frame = cv2.bitwise_and(frame, frame, mask=mask_roi)
                 cv2.rectangle(output_image, (x, y), (x+w, y+h), (255, 0, 0), 2)
 
-        if self.selecting:
+        if self.selecting and self.roi_start and self.roi_end:
             cv2.rectangle(output_image, self.roi_start, self.roi_end, (0, 0, 255), 1)
 
         hsv = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2HSV)
@@ -84,10 +89,7 @@ class CubeDetector(Node):
         for color_name, ranges in self.color_ranges.items():
             mask = np.zeros(hsv.shape[:2], dtype="uint8")
             for (lower, upper) in ranges:
-                # [수정된 부분] 리스트를 넘파이 배열로 변환
-                lower_np = np.array(lower, dtype="uint8")
-                upper_np = np.array(upper, dtype="uint8")
-                mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lower_np, upper_np))
+                mask = cv2.bitwise_or(mask, cv2.inRange(hsv, np.array(lower, dtype="uint8"), np.array(upper, dtype="uint8")))
 
             mask = cv2.erode(mask, None, iterations=1)
             mask = cv2.dilate(mask, None, iterations=2)
@@ -95,7 +97,7 @@ class CubeDetector(Node):
 
             for contour in contours:
                 if 1000 < cv2.contourArea(contour) < 15000:
-                    x, y, w, h = cv2.boundingRect(contour)
+                    bx, by, bw, bh = cv2.boundingRect(contour)
                     M = cv2.moments(contour)
                     if M["m00"] != 0:
                         cx = int(M["m10"] / M["m00"])
@@ -104,10 +106,9 @@ class CubeDetector(Node):
                         cam_x, cam_y, cam_z = 0.0, 0.0, 0.0
                         
                         if self.latest_depth_img is not None and self.camera_intrinsics:
-                            # Depth 좌표 클리핑 (IndexError 방지)
+                            # 1. Depth 값 가져오기 (원본 픽셀 좌표 사용)
                             d_y = min(max(cy, 0), self.latest_depth_img.shape[0]-1)
                             d_x = min(max(cx, 0), self.latest_depth_img.shape[1]-1)
-                            
                             depth_mm = self.latest_depth_img[d_y, d_x]
                             
                             if depth_mm > 0:
@@ -115,18 +116,30 @@ class CubeDetector(Node):
                                 fx = self.camera_intrinsics['fx']; fy = self.camera_intrinsics['fy']
                                 cx_cam = self.camera_intrinsics['cx']; cy_cam = self.camera_intrinsics['cy']
 
-                                cam_x = (cx - cx_cam) * cam_z / fx
-                                cam_y = (cy - cy_cam) * cam_z / fy
+                                # 2. [핵심 변경] 왜곡 보정 (Undistort)
+                                # 픽셀 좌표(cx, cy)를 렌즈 왜곡을 고려하여 펴줍니다.
+                                if self.dist_coeffs is not None:
+                                    # 입력 형식을 맞추기 위한 차원 조작
+                                    src_pt = np.array([[[float(cx), float(cy)]]], dtype=np.float32)
+                                    camera_matrix = np.array([[fx, 0, cx_cam], [0, fy, cy_cam], [0, 0, 1]], dtype=np.float32)
+                                    
+                                    # undistortPoints는 정규화된 좌표를 반환하므로, 다시 픽셀 좌표계(P=camera_matrix)로 변환
+                                    dst_pt = cv2.undistortPoints(src_pt, camera_matrix, self.dist_coeffs, P=camera_matrix)
+                                    cx_fixed = dst_pt[0][0][0]
+                                    cy_fixed = dst_pt[0][0][1]
+                                else:
+                                    cx_fixed, cy_fixed = cx, cy
+
+                                # 3. 보정된 픽셀 좌표로 실제 거리(m) 계산
+                                cam_x = (cx_fixed - cx_cam) * cam_z / fx
+                                cam_y = (cy_fixed - cy_cam) * cam_z / fy
                                 
-                                # 화면 출력 텍스트
                                 text_str = f"{color_name} Z:{cam_z:.3f}m"
-                                
-                                # 터미널 로그 출력
                                 print(f"[{color_name}] Cam: ({cam_x:.4f}, {cam_y:.4f}, {cam_z:.4f})")
 
-                                cv2.rectangle(output_image, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                                cv2.rectangle(output_image, (bx, by), (bx+bw, by+bh), (0, 255, 0), 2)
                                 cv2.circle(output_image, (cx, cy), 5, (255, 255, 255), -1)
-                                cv2.putText(output_image, text_str, (x, y - 10),
+                                cv2.putText(output_image, text_str, (bx, by - 10),
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
         if not self.roi_selected:
