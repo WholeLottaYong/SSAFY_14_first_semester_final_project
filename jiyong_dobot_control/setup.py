@@ -35,6 +35,7 @@ setup(
             'cube_detector = jiyong_dobot_control.cube_detector:main',
             'calc_matrix = jiyong_dobot_control.calc_matrix:main',
             'dobot_test_final = jiyong_dobot_control.dobot_test_final:main',
+            'dobot_test_with_conv = jiyong_dobot_control.dobot_test_with_conv:main',
         ],
     },
 )
