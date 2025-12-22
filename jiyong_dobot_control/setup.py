@@ -34,9 +34,7 @@ setup(
         'console_scripts': [
             'cube_detector = jiyong_dobot_control.cube_detector:main',
             'calc_matrix = jiyong_dobot_control.calc_matrix:main',
-            'dobot_test = jiyong_dobot_control.dobot_test:main',
-            'dobot_test2 = jiyong_dobot_control.dobot_test2:main',
-            'dobot_test3 = jiyong_dobot_control.dobot_test3:main',
+            'dobot_test_final = jiyong_dobot_control.dobot_test_final:main',
         ],
     },
 )

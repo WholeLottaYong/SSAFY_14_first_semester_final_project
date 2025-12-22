@@ -18,7 +18,7 @@ class CubeDetector(Node):
 
         self.latest_depth_img = None
         self.camera_intrinsics = None
-        self.dist_coeffs = None  # [추가] 왜곡 계수 저장 변수
+        self.dist_coeffs = None
         
         self.create_subscription(CameraInfo, self.info_topic, self.info_callback, 10)
         self.create_subscription(Image, self.depth_topic, self.depth_callback, qos_profile_sensor_data)
@@ -37,7 +37,15 @@ class CubeDetector(Node):
             'Green': [([40, 70, 70], [80, 255, 255])],
             'Yellow':[([20, 100, 100], [30, 255, 255])]
         }
-        self.get_logger().info('Ready! Check the Z value in terminal.')
+
+        # [추가] 데이터 캡처 및 상태 관리 변수
+        self.is_capturing = False
+        self.measurement_done = False # 측정이 끝나면 True가 되어 로그를 멈춤
+        self.capture_count = 0
+        self.capture_limit = 60
+        self.capture_data = {k: [] for k in self.color_ranges.keys()}
+
+        self.get_logger().info('Ready! Press "c" to capture, "r" to reset.')
 
     def info_callback(self, msg):
         if self.camera_intrinsics is None:
@@ -45,7 +53,7 @@ class CubeDetector(Node):
                 'fx': msg.k[0], 'fy': msg.k[4], 
                 'cx': msg.k[2], 'cy': msg.k[5]
             }
-            self.dist_coeffs = np.array(msg.d) # [추가] 왜곡 계수 저장
+            self.dist_coeffs = np.array(msg.d)
 
     def depth_callback(self, msg):
         try: self.latest_depth_img = self.bridge.imgmsg_to_cv2(msg, "16UC1")
@@ -86,6 +94,7 @@ class CubeDetector(Node):
 
         hsv = cv2.cvtColor(processing_frame, cv2.COLOR_BGR2HSV)
 
+        # 현재 프레임에서 발견된 색상들 처리
         for color_name, ranges in self.color_ranges.items():
             mask = np.zeros(hsv.shape[:2], dtype="uint8")
             for (lower, upper) in ranges:
@@ -106,7 +115,6 @@ class CubeDetector(Node):
                         cam_x, cam_y, cam_z = 0.0, 0.0, 0.0
                         
                         if self.latest_depth_img is not None and self.camera_intrinsics:
-                            # 1. Depth 값 가져오기 (원본 픽셀 좌표 사용)
                             d_y = min(max(cy, 0), self.latest_depth_img.shape[0]-1)
                             d_x = min(max(cx, 0), self.latest_depth_img.shape[1]-1)
                             depth_mm = self.latest_depth_img[d_y, d_x]
@@ -116,37 +124,112 @@ class CubeDetector(Node):
                                 fx = self.camera_intrinsics['fx']; fy = self.camera_intrinsics['fy']
                                 cx_cam = self.camera_intrinsics['cx']; cy_cam = self.camera_intrinsics['cy']
 
-                                # 2. [핵심 변경] 왜곡 보정 (Undistort)
-                                # 픽셀 좌표(cx, cy)를 렌즈 왜곡을 고려하여 펴줍니다.
                                 if self.dist_coeffs is not None:
-                                    # 입력 형식을 맞추기 위한 차원 조작
                                     src_pt = np.array([[[float(cx), float(cy)]]], dtype=np.float32)
                                     camera_matrix = np.array([[fx, 0, cx_cam], [0, fy, cy_cam], [0, 0, 1]], dtype=np.float32)
-                                    
-                                    # undistortPoints는 정규화된 좌표를 반환하므로, 다시 픽셀 좌표계(P=camera_matrix)로 변환
                                     dst_pt = cv2.undistortPoints(src_pt, camera_matrix, self.dist_coeffs, P=camera_matrix)
                                     cx_fixed = dst_pt[0][0][0]
                                     cy_fixed = dst_pt[0][0][1]
                                 else:
                                     cx_fixed, cy_fixed = cx, cy
 
-                                # 3. 보정된 픽셀 좌표로 실제 거리(m) 계산
                                 cam_x = (cx_fixed - cx_cam) * cam_z / fx
                                 cam_y = (cy_fixed - cy_cam) * cam_z / fy
                                 
                                 text_str = f"{color_name} Z:{cam_z:.3f}m"
-                                print(f"[{color_name}] Cam: ({cam_x:.4f}, {cam_y:.4f}, {cam_z:.4f})")
+                                
+                                # 캡처 중도 아니고, 측정 완료 상태도 아닐 때만 로그 출력
+                                if not self.is_capturing and not self.measurement_done:
+                                    print(f"[{color_name}] Cam: ({cam_x:.4f}, {cam_y:.4f}, {cam_z:.4f})")
+                                
+                                # [수정] 캡처 모드일 경우 데이터 저장 (x, y, z 모두 저장)
+                                if self.is_capturing:
+                                    self.capture_data[color_name].append((cam_x, cam_y, cam_z))
 
                                 cv2.rectangle(output_image, (bx, by), (bx+bw, by+bh), (0, 255, 0), 2)
                                 cv2.circle(output_image, (cx, cy), 5, (255, 255, 255), -1)
                                 cv2.putText(output_image, text_str, (bx, by - 10),
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
+        # 캡처 로직 처리
+        if self.is_capturing:
+            self.capture_count += 1
+            status_text = f"Capturing... {self.capture_count}/{self.capture_limit}"
+            cv2.putText(output_image, status_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+            if self.capture_count >= self.capture_limit:
+                self.finalize_capture()
+                self.is_capturing = False
+        
+        # 측정 완료 상태 표시
+        if self.measurement_done:
+             cv2.putText(output_image, "Result Fixed. Press 'r' to reset", (10, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
         if not self.roi_selected:
             cv2.putText(output_image, "Drag mouse to select Area", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         cv2.imshow(self.window_name, output_image)
-        if cv2.waitKey(1) & 0xFF == 27: rclpy.shutdown()
+        
+        # 키 입력 처리
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27: # ESC
+            rclpy.shutdown()
+        elif key == ord('c'): # Capture
+            if not self.is_capturing and not self.measurement_done:
+                self.start_capture()
+        elif key == ord('r'): # Reset
+            self.reset_measurement()
+
+    def start_capture(self):
+        self.is_capturing = True
+        self.capture_count = 0
+        for k in self.capture_data:
+            self.capture_data[k] = []
+        self.get_logger().info("Started capturing 60 frames...")
+
+    def reset_measurement(self):
+        self.measurement_done = False
+        self.is_capturing = False
+        self.capture_count = 0
+        self.get_logger().info("Reset! Logs resumed. Press 'c' to capture again.")
+
+    def finalize_capture(self):
+        target_order = ['Red', 'Blue', 'Green', 'Yellow']
+        
+        print("\n" + "="*40)
+        print("CAPTURE COMPLETE (Avg of 60 frames)")
+        print("="*40)
+        
+        output_str = "solution)\n# 1. 카메라 좌표\npts_camera = np.float32([\n"
+        
+        z_values = [] # Z값 평균을 저장할 리스트
+        
+        for color in target_order:
+            points = self.capture_data.get(color, [])
+            if len(points) > 0:
+                avg_x = np.mean([p[0] for p in points])
+                avg_y = np.mean([p[1] for p in points])
+                avg_z = np.mean([p[2] for p in points]) # Z값 평균 계산
+                
+                output_str += f"    [{avg_x:.4f}, {avg_y:.4f}],   # {color}\n"
+                z_values.append(f"{avg_z:.3f}")
+            else:
+                output_str += f"    [0.0000, 0.0000],   # {color} (Not Detected)\n"
+                z_values.append("0.000")
+        
+        output_str += "])\n\n"
+        
+        # [추가] 2. 카메라 좌표 평균 z 값 출력 섹션
+        output_str += "# 2. 카메라 좌표 평균 z 값 :\n"
+        output_str += f"[{', '.join(z_values)}] # Red, Blue, Green, Yellow"
+
+        print(output_str)
+        print("="*40)
+        print("Log stopped. Press 'r' to restart.")
+        
+        # 측정 완료 플래그 활성화 -> 로그 중단
+        self.measurement_done = True
 
 def main(args=None):
     rclpy.init(args=args)
