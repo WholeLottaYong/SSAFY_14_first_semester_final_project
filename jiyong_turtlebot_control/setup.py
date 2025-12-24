@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'yolo_cube_detect_client = jiyong_turtlebot_control.yolo_cube_detect_client:main',
         ],
     },
 )
